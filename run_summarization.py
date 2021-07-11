@@ -363,7 +363,9 @@ def main():
 
     tokenizer = GPT2Tokenizer.from_pretrained(gpt2_name_path)
 
-    if vit_gpt2_name_path is None:
+    if not vit_gpt2_name_path:
+        assert vit_name_path
+        assert gpt2_name_path
         vit_gpt2_model = FlaxViTGPT2ForConditionalGeneration.from_vit_gpt2_pretrained(
             vit_name_path, gpt2_name_path
         )
@@ -633,7 +635,7 @@ def main():
 
     def generate_step(params, batch):
         model.params = params
-        #TODO: output_ids = model.generate(batch["pixel_values"], **gen_kwargs)
+        output_ids = model.generate(batch["pixel_values"], **gen_kwargs)
         return output_ids.sequences
 
     # Create parallel version of the train and eval step
