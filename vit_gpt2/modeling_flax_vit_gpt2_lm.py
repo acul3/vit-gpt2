@@ -27,6 +27,17 @@ from transformers.models.vit.modeling_flax_vit import FlaxViTModule
 from .configuration_vit_gpt2 import ViTGPT2Config
 
 
+def shift_tokens_right(input_ids: jnp.ndarray, pad_token_id: int, decoder_start_token_id: int) -> jnp.ndarray:
+    """
+    Shift input ids one token to the right.
+    """
+    shifted_input_ids = jnp.roll(input_ids, 1, axis=-1)
+    shifted_input_ids = jax.ops.index_update(shifted_input_ids, (..., 0), decoder_start_token_id)
+    # replace possible -100 values in labels by `pad_token_id`
+    shifted_input_ids = jnp.where(shifted_input_ids == -100, pad_token_id, shifted_input_ids)
+
+    return shifted_input_ids
+
 class FlaxViTGPT2LMModule(nn.Module):
     config: ViTGPT2Config
     dtype: jnp.dtype = jnp.float32  # the dtype of the computation

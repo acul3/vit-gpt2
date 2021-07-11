@@ -18,6 +18,11 @@ Fine-tuning the library models for summarization.
 """
 # You can also adapt this script on your own sequence to sequence task. Pointers for this are left as comments.
 
+import sys, os
+
+current_path = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_path)
+
 import logging
 import os
 import sys
@@ -54,7 +59,8 @@ from transformers import (
 )
 from transformers.file_utils import is_offline_mode
 
-from vit_gpt2.modeling_flax_vit_gpt2_lm import FlaxViTGPT2ForConditionalGeneration
+from transformers import ViTFeatureExtractor, GPT2Tokenizer, GPT2Config
+from vit_gpt2.modeling_flax_vit_gpt2_lm import FlaxViTGPT2LMForConditionalGeneration
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +346,7 @@ def main():
     if data_args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
         dataset = load_dataset(
-            data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir, keep_in_memory=False
+            data_args.dataset_name, data_args.dataset_config_name, cache_dir=model_args.cache_dir, keep_in_memory=False, data_dir='./wit_data_dir/'
         )
     else:
         data_files = {}
@@ -357,6 +363,11 @@ def main():
 
     vit_name_path = 'google/vit-base-patch16-224-in21k'
     gpt2_name_path = 'asi/gpt-fr-cased-small'
+    
+    gpt2_config = GPT2Config.from_pretrained(gpt2_name_path)
+    gpt2_config.add_cross_attention = True
+    
+    
     vit_gpt2_name_path = ''
 
     feature_extractor = ViTFeatureExtractor.from_pretrained(vit_name_path)
@@ -366,13 +377,15 @@ def main():
     if not vit_gpt2_name_path:
         assert vit_name_path
         assert gpt2_name_path
-        vit_gpt2_model = FlaxViTGPT2ForConditionalGeneration.from_vit_gpt2_pretrained(
+        vit_gpt2_model = FlaxViTGPT2LMForConditionalGeneration.from_vit_gpt2_pretrained(
             vit_name_path, gpt2_name_path
         )
     else:
-        vit_gpt2_model = FlaxViTGPT2ForConditionalGeneration.from_pretrained(
+        vit_gpt2_model = FlaxViTGPT2LMForConditionalGeneration.from_pretrained(
             vit_gpt2_name_path
         )
+        
+    model = vit_gpt2_model
 
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
@@ -396,21 +409,28 @@ def main():
     # In Flax, for seq2seq models we need to pass `decoder_input_ids`
     # as the Flax models don't accept `labels`, we need to prepare the decoder_input_ids here
     # for that dynamically import the `shift_tokens_right` function from the model file
-    model_module = __import__(model.__module__, fromlist=["shift_tokens_tight"])
+    model_module = __import__(vit_gpt2_model.__module__, fromlist=["shift_tokens_tight"])
     shift_tokens_right_fn = getattr(model_module, "shift_tokens_right")
 
     # Setting padding="max_length" as we need fixed length inputs for jitted functions
     def preprocess_function(examples):
-
+    
         pixel_values = examples[pixel_values_column]
         if not pixel_values:
             assert examples[image_column]
-            with Image.open(examples[image_column]) as image:
-                encoder_inputs = feature_extractor(images=image, return_tensors="np")
-                pixel_values = encoder_inputs.pixel_values
+            _pixel_values = []
+            for y in examples[image_column]:
+                with Image.open(y) as image:
+                    encoder_inputs = feature_extractor(images=image, return_tensors="np")
+                    x = encoder_inputs.pixel_values
+                    _pixel_values.append(x)
+            pixel_values = np.array([np.load(x) for x in _pixel_values])
+        else:
+            pixel_values = np.concatenate([np.load(x) for x in pixel_values])
 
         targets = examples[caption_column]
 
+        model_inputs = {}
         model_inputs['pixel_values'] = pixel_values
 
         # Setup the tokenizer for targets
@@ -420,8 +440,13 @@ def main():
             )
 
         model_inputs["labels"] = labels["input_ids"]
+        
+        #print(labels["input_ids"])
+        #print(gpt2_config.pad_token_id)
+        #rint(gpt2_config.bos_token_id)
+        
         decoder_input_ids = shift_tokens_right_fn(
-            jnp.array(labels["input_ids"]), gpt2_config.pad_token_id, gpt2_config.decoder_start_token_id
+            jnp.array(labels["input_ids"]), gpt2_config.pad_token_id, gpt2_config.bos_token_id
         )
         model_inputs["input_ids"] = np.asarray(decoder_input_ids)
 
@@ -436,6 +461,7 @@ def main():
         train_dataset = dataset["train"]
         if data_args.max_train_samples is not None:
             train_dataset = train_dataset.select(range(data_args.max_train_samples))
+            
         train_dataset = train_dataset.map(
             preprocess_function,
             batched=True,
@@ -570,7 +596,7 @@ def main():
     )
 
     # Setup train state
-    state = TrainState.create(apply_fn=model.__call__, params=model.params, tx=adamw, dropout_rng=dropout_rng)
+    state = TrainState.create(apply_fn=vit_gpt2_model.__call__, params=vit_gpt2_model.params, tx=adamw, dropout_rng=dropout_rng)
 
     # label smoothed cross entropy
     def loss_fn(logits, labels, padding_mask, label_smoothing_factor=0.0):
