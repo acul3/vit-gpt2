@@ -52,11 +52,11 @@ class WITDataset(datasets.GeneratorBasedBuilder):
             {
                 "id": datasets.Value("int64"),
                 "lang": datasets.Value("string"),
-                "image": datasets.Value("string"),
                 "caption": datasets.Value("string"),
                 "image_url": datasets.Value("string"),
                 "page_url": datasets.Value("string"),
-                "pixel_values": datasets.Value("string")
+                "image_file": datasets.Value("string"),
+                "pixels_file": datasets.Value("string")
                 # These are the features of your dataset like images, labels ...
             }
         )
@@ -119,27 +119,25 @@ class WITDataset(datasets.GeneratorBasedBuilder):
         # This method handles input defined in _split_generators to yield (key, example) tuples from the dataset.
         # The `key` is here for legacy reason (tfds) and is not important in itself.
 
-        df = pd.read_csv(os.path.join(data_dir, f'{split}.csv'), sep='\t')
+        df = pd.read_csv(os.path.join(data_dir, f'{split}.tsv'), sep='\t')
 
         for id_, row in df.iterrows():
 
             _id = row[0]
 
-            if not os.path.isfile(os.path.join(data_dir, 'images', f'{_id}.jpg')):
+            # null caption
+            if type(row[4]) != str:
                 continue
 
-            image = os.path.join(data_dir, 'images', f'{_id}.jpg')
-            pixel_values = os.path.join(data_dir, 'numpy', f'{_id}.npy')
-
-            # pixel_values = np.load(os.path.join(data_dir, 'numpy', f'{_id}.npy'))
+            image_file = os.path.join(data_dir, 'images', f'{_id}.jpg')
+            pixels_file = os.path.join(data_dir, 'numpy', f'{_id}.npy')
 
             yield id_, {
                 "id": row[0],
                 "lang": row[1],
+                "caption": row[4],
                 "image_url": row[2],
                 "page_url": row[3],
-                "image": image,
-                "caption": row[4],
-                "pixel_values": pixel_values
+                "image_file": image_file,
+                "pixels_file": pixels_file
             }
-
